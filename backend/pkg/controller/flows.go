@@ -35,6 +35,7 @@ type FlowController interface {
 		prvtype provider.ProviderType,
 		functions *tools.Functions,
 		resources []database.UserResource,
+		modelCred *provider.ModelCredential,
 	) (int64, error)
 	CreateAssistant(
 		ctx context.Context,
@@ -281,6 +282,7 @@ func (fc *flowController) CreateFlow(
 	prvtype provider.ProviderType,
 	functions *tools.Functions,
 	resources []database.UserResource,
+	modelCred *provider.ModelCredential,
 ) (int64, error) {
 	fwc := newFlowWorkerCtx{
 		userID:        userID,
@@ -289,6 +291,7 @@ func (fc *flowController) CreateFlow(
 		prvtype:       prvtype,
 		functions:     functions,
 		resources:     resources,
+		cred:          modelCred,
 		flowWorkerCtx: fc.flowWorkerCtx(),
 	}
 
