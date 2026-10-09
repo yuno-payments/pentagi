@@ -86,6 +86,10 @@ type newFlowWorkerCtx struct {
 	prvtype   provider.ProviderType
 	functions *tools.Functions
 	resources []database.UserResource
+	// cred is an optional per-flow LLM credential, preferred over the global
+	// config when building this flow's provider. nil for the default path and
+	// for restored flows (never persisted).
+	cred *provider.ModelCredential
 
 	flowWorkerCtx
 }
@@ -219,7 +223,7 @@ func buildFlowWorker(
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to create flow tools executor", err)
 	}
 	flowProvider, err := fwc.provs.NewFlowProvider(
-		ctx, fwc.prvname, prompter, executor, flow.ID, fwc.userID, fwc.cfg.AskUser, fwc.input,
+		ctx, fwc.prvname, prompter, executor, flow.ID, fwc.userID, fwc.cfg.AskUser, fwc.input, fwc.cred,
 	)
 	if err != nil {
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to get flow provider", err)

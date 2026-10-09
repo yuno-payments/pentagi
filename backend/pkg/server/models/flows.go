@@ -80,13 +80,26 @@ func (f Flow) Validate(db *gorm.DB) {
 	}
 }
 
+// ModelProviderCredential is an optional per-flow LLM credential. When present
+// on CreateFlow the flow's provider is built with this key/token (and model, if
+// set), overriding the server's global provider config — so a Pentest-as-a-
+// Service run can bill its model spend to a chain-selected account. Never
+// persisted; a restored flow falls back to the global config.
+// nolint:lll
+type ModelProviderCredential struct {
+	APIKey     string `form:"api_key,omitempty" json:"api_key,omitempty" validate:"omitempty"`
+	OAuthToken string `form:"oauth_token,omitempty" json:"oauth_token,omitempty" validate:"omitempty"`
+	Model      string `form:"model,omitempty" json:"model,omitempty" validate:"omitempty"`
+}
+
 // CreateFlow is model to contain flow creation paylaod
 // nolint:lll
 type CreateFlow struct {
-	Input       string           `form:"input" json:"input" validate:"required" example:"user input for first task in the flow"`
-	Provider    string           `form:"provider" json:"provider" validate:"required" example:"openai"`
-	Functions   *tools.Functions `form:"functions,omitempty" json:"functions,omitempty" validate:"omitempty,valid"`
-	ResourceIDs []uint64         `form:"resource_ids,omitempty" json:"resource_ids,omitempty" validate:"omitempty" swaggertype:"array,integer"`
+	Input               string                   `form:"input" json:"input" validate:"required" example:"user input for first task in the flow"`
+	Provider            string                   `form:"provider" json:"provider" validate:"required" example:"openai"`
+	Functions           *tools.Functions         `form:"functions,omitempty" json:"functions,omitempty" validate:"omitempty,valid"`
+	ResourceIDs         []uint64                 `form:"resource_ids,omitempty" json:"resource_ids,omitempty" validate:"omitempty" swaggertype:"array,integer"`
+	ModelProviderConfig *ModelProviderCredential `form:"model_provider_config,omitempty" json:"model_provider_config,omitempty" validate:"omitempty"`
 }
 
 // Valid is function to control input/output data

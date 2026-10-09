@@ -116,7 +116,7 @@ func TestTitle_NormalizeTitle_IsAppliedToEveryGeneratedTitle(t *testing.T) {
 		title  func(t *testing.T, pc *providerController, prv provider.Provider) string
 	}{
 		{"the flow title", "Flow Title Generator", func(t *testing.T, pc *providerController, prv provider.Provider) string {
-			fp, err := pc.NewFlowProvider(t.Context(), prv.Name(), templates.NewDefaultPrompter(), nil, 1, 1, false, input)
+			fp, err := pc.NewFlowProvider(t.Context(), prv.Name(), templates.NewDefaultPrompter(), nil, 1, 1, false, input, nil)
 			require.NoError(t, err)
 
 			return fp.Title()

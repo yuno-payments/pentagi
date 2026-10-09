@@ -60,6 +60,7 @@ type ProviderController interface {
 		flowID, userID int64,
 		askUser bool,
 		input string,
+		cred *provider.ModelCredential,
 	) (FlowProvider, error)
 	LoadFlowProvider(
 		ctx context.Context,
@@ -304,11 +305,20 @@ func (pc *providerController) NewFlowProvider(
 	flowID, userID int64,
 	askUser bool,
 	input string,
+	cred *provider.ModelCredential,
 ) (FlowProvider, error) {
 	ctx, span := obs.Observer.NewSpan(ctx, obs.SpanKindInternal, "providers.NewFlowProvider")
 	defer span.End()
 
-	prv, err := pc.GetProvider(ctx, prvname, userID)
+	var (
+		prv provider.Provider
+		err error
+	)
+	if cred.Secret() != "" {
+		prv, err = pc.providerWithCredential(ctx, prvname, userID, cred)
+	} else {
+		prv, err = pc.GetProvider(ctx, prvname, userID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get provider: %w", err)
 	}
@@ -1186,6 +1196,72 @@ func (pc *providerController) patchProviderConfig(
 	config.SetDefaultOptions(defaultCfg.GetDefaultOptions())
 
 	return config, nil
+}
+
+// providerWithCredential builds a provider instance for prvname using a per-flow
+// credential in place of the process config, so a single flow can bill its model
+// spend to a chain-selected account. The built-in provider name equals its type
+// (registry invariant); a user-defined provider contributes its stored raw config.
+// The credential is applied to a shallow config copy, so the process config and
+// any cached provider are untouched.
+func (pc *providerController) providerWithCredential(
+	ctx context.Context,
+	prvname provider.ProviderName,
+	userID int64,
+	cred *provider.ModelCredential,
+) (provider.Provider, error) {
+	var (
+		prvtype provider.ProviderType
+		raw     []byte
+	)
+	uprv, err := pc.db.GetUserProviderByName(ctx, database.GetUserProviderByNameParams{
+		Name:   string(prvname),
+		UserID: userID,
+	})
+	switch {
+	case err == nil:
+		prvtype = provider.ProviderType(uprv.Type)
+		raw = uprv.Config
+	case err == sql.ErrNoRows:
+		prvtype = provider.ProviderType(prvname)
+		raw = []byte(pconfig.EmptyProviderConfigRaw)
+	default:
+		return nil, fmt.Errorf("failed to look up provider '%s': %w", prvname, err)
+	}
+
+	e, ok := entryForType(prvtype)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider type: %s", prvtype)
+	}
+
+	cfgCopy := *pc.cfg
+	applyCredentialToConfig(&cfgCopy, prvtype, cred)
+
+	config, err := e.BuildConfig(&cfgCopy, raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build %s provider config: %w", prvtype, err)
+	}
+
+	return e.New(&cfgCopy, prvname, config)
+}
+
+// applyCredentialToConfig overrides the credential field of cfg for prvtype with
+// the per-flow secret (API key, else OAuth token). Only the chain-supported
+// api-key providers are handled; an unrecognised type leaves cfg unchanged and
+// the global credential stands.
+func applyCredentialToConfig(cfg *config.Config, prvtype provider.ProviderType, cred *provider.ModelCredential) {
+	secret := cred.Secret()
+	if secret == "" {
+		return
+	}
+	switch prvtype {
+	case provider.ProviderOpenAI:
+		cfg.OpenAIKey = secret
+	case provider.ProviderAnthropic:
+		cfg.AnthropicAPIKey = secret
+	case provider.ProviderGemini:
+		cfg.GeminiAPIKey = secret
+	}
 }
 
 func (pc *providerController) buildProviderFromConfig(

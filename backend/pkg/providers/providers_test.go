@@ -832,3 +832,82 @@ func (r *recordingProvidersQuerier) CreateProvider(
 	r.lastName = params.Name
 	return database.Provider{Name: params.Name}, nil
 }
+
+func TestProviders_applyCredentialToConfig_SetsFieldByType(t *testing.T) {
+	cases := []struct {
+		name  string
+		typ   provider.ProviderType
+		cred  *provider.ModelCredential
+		check func(*testing.T, *config.Config)
+	}{
+		{
+			"openai api key", provider.ProviderOpenAI,
+			&provider.ModelCredential{APIKey: "sk-openai"},
+			func(t *testing.T, c *config.Config) {
+				if c.OpenAIKey != "sk-openai" {
+					t.Fatalf("OpenAIKey = %q, want sk-openai", c.OpenAIKey)
+				}
+			},
+		},
+		{
+			"anthropic api key", provider.ProviderAnthropic,
+			&provider.ModelCredential{APIKey: "sk-ant"},
+			func(t *testing.T, c *config.Config) {
+				if c.AnthropicAPIKey != "sk-ant" {
+					t.Fatalf("AnthropicAPIKey = %q, want sk-ant", c.AnthropicAPIKey)
+				}
+			},
+		},
+		{
+			"gemini api key", provider.ProviderGemini,
+			&provider.ModelCredential{APIKey: "sk-gem"},
+			func(t *testing.T, c *config.Config) {
+				if c.GeminiAPIKey != "sk-gem" {
+					t.Fatalf("GeminiAPIKey = %q, want sk-gem", c.GeminiAPIKey)
+				}
+			},
+		},
+		{
+			"api key preferred over oauth", provider.ProviderAnthropic,
+			&provider.ModelCredential{APIKey: "sk-ant", OAuthToken: "oauth-xyz"},
+			func(t *testing.T, c *config.Config) {
+				if c.AnthropicAPIKey != "sk-ant" {
+					t.Fatalf("AnthropicAPIKey = %q, want the api key (not the oauth token)", c.AnthropicAPIKey)
+				}
+			},
+		},
+		{
+			"oauth token used when no api key", provider.ProviderAnthropic,
+			&provider.ModelCredential{OAuthToken: "oauth-xyz"},
+			func(t *testing.T, c *config.Config) {
+				if c.AnthropicAPIKey != "oauth-xyz" {
+					t.Fatalf("AnthropicAPIKey = %q, want the oauth token", c.AnthropicAPIKey)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			applyCredentialToConfig(cfg, tc.typ, tc.cred)
+			tc.check(t, cfg)
+		})
+	}
+}
+
+func TestProviders_applyCredentialToConfig_LeavesConfigUntouchedWhenNoSecretOrUnknownType(t *testing.T) {
+	assertKeysUnchanged := func(t *testing.T, c *config.Config) {
+		if c.OpenAIKey != "env-openai" || c.AnthropicAPIKey != "env-ant" || c.GeminiAPIKey != "env-gem" {
+			t.Fatalf("credential fields mutated: openai=%q anthropic=%q gemini=%q",
+				c.OpenAIKey, c.AnthropicAPIKey, c.GeminiAPIKey)
+		}
+	}
+
+	empty := &config.Config{OpenAIKey: "env-openai", AnthropicAPIKey: "env-ant", GeminiAPIKey: "env-gem"}
+	applyCredentialToConfig(empty, provider.ProviderAnthropic, &provider.ModelCredential{})
+	assertKeysUnchanged(t, empty)
+
+	unknown := &config.Config{OpenAIKey: "env-openai", AnthropicAPIKey: "env-ant", GeminiAPIKey: "env-gem"}
+	applyCredentialToConfig(unknown, provider.ProviderBedrock, &provider.ModelCredential{APIKey: "sk-x"})
+	assertKeysUnchanged(t, unknown)
+}

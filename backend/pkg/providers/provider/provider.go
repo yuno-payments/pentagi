@@ -214,3 +214,26 @@ func (p Providers) ListTypes() ProvidersListTypes {
 
 	return listTypes
 }
+
+// ModelCredential is an optional per-flow LLM credential supplied at flow
+// creation (Pentest-as-a-Service injects one resolved from its AI-connection
+// chain, so a run's model spend bills to the chosen account). When set it is
+// preferred over the process-wide config; when nil the global config is used.
+// It is never persisted, so a flow restored after a restart falls back to the
+// global config.
+type ModelCredential struct {
+	APIKey     string
+	OAuthToken string
+	Model      string
+}
+
+// Secret returns the credential material (API key, else OAuth token).
+func (c *ModelCredential) Secret() string {
+	if c == nil {
+		return ""
+	}
+	if c.APIKey != "" {
+		return c.APIKey
+	}
+	return c.OAuthToken
+}

@@ -370,7 +370,12 @@ func (s *FlowService) CreateFlow(c *gin.Context) {
 		return
 	}
 
-	flowID, err := s.fc.CreateFlow(c, int64(uid), createFlow.Input, prvname, prvtype, createFlow.Functions, dbResources)
+	var modelCred *provider.ModelCredential
+	if mc := createFlow.ModelProviderConfig; mc != nil && (mc.APIKey != "" || mc.OAuthToken != "") {
+		modelCred = &provider.ModelCredential{APIKey: mc.APIKey, OAuthToken: mc.OAuthToken, Model: mc.Model}
+	}
+
+	flowID, err := s.fc.CreateFlow(c, int64(uid), createFlow.Input, prvname, prvtype, createFlow.Functions, dbResources, modelCred)
 	if err != nil {
 		logger.FromContext(c).WithError(err).Errorf("error creating flow")
 		response.Error(c, response.ErrInternal, err)
