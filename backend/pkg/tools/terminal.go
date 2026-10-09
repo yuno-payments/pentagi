@@ -16,10 +16,10 @@ import (
 
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/observability/langfuse"
 
-	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 )
 
@@ -52,7 +52,7 @@ type terminal struct {
 	containerID        int64
 	containerLID       string
 	tenantPrefix       string
-	dockerClient       docker.DockerClient
+	sandbox            executor.FlowExecutor
 	tlp                TermLogProvider
 	defaultExecTimeout time.Duration
 }
@@ -62,7 +62,7 @@ func NewTerminalTool(
 	taskID, subtaskID *int64,
 	containerID int64, containerLID string,
 	tenantPrefix string,
-	dockerClient docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	tlp TermLogProvider,
 	defaultExecTimeout time.Duration,
 ) Tool {
@@ -73,7 +73,7 @@ func NewTerminalTool(
 		containerID:        containerID,
 		containerLID:       containerLID,
 		tenantPrefix:       tenantPrefix,
-		dockerClient:       dockerClient,
+		sandbox:            sandbox,
 		tlp:                tlp,
 		defaultExecTimeout: defaultExecTimeout,
 	}
@@ -225,7 +225,7 @@ func (t *terminal) ExecCommand(
 
 	timeout = t.normalizeExecTimeout(timeout)
 
-	createResp, err := t.dockerClient.ContainerExecCreate(ctx, containerName, client.ExecCreateOptions{
+	execID, err := t.sandbox.Exec(ctx, containerName, executor.ExecSpec{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -242,7 +242,7 @@ func (t *terminal) ExecCommand(
 		detachedCtx := context.WithoutCancel(ctx)
 
 		go func() {
-			output, err := t.getExecResult(detachedCtx, createResp.ID, timeout)
+			output, err := t.getExecResult(detachedCtx, execID, timeout)
 			resultChan <- execResult{output: output, err: err}
 		}()
 
@@ -257,7 +257,7 @@ func (t *terminal) ExecCommand(
 		}
 	}
 
-	return t.getExecResult(ctx, createResp.ID, timeout)
+	return t.getExecResult(ctx, execID, timeout)
 }
 
 func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Duration) (string, error) {
@@ -267,19 +267,17 @@ func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Du
 		defer cancel()
 	}
 
-	resp, err := t.dockerClient.ContainerExecAttach(ctx, id, client.ExecAttachOptions{
-		TTY: true,
-	})
+	stream, err := t.sandbox.ExecAttach(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("failed to attach to exec process: %w", err)
 	}
-	defer resp.Close()
+	defer stream.Close()
 
 	dst := bytes.Buffer{}
 	errChan := make(chan error, 1)
 
 	go func() {
-		_, copyErr := io.Copy(&dst, resp.Reader)
+		_, copyErr := io.Copy(&dst, stream.Stdout())
 		errChan <- copyErr
 	}()
 
@@ -289,8 +287,8 @@ func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Du
 			return "", fmt.Errorf("failed to copy output: %w", err)
 		}
 	case <-ctx.Done():
-		// Close the response to unblock io.Copy
-		resp.Close()
+		// Close the stream to unblock io.Copy
+		stream.Close()
 
 		// Wait for the copy goroutine to finish
 		<-errChan
@@ -327,7 +325,7 @@ func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Du
 		)
 	}
 
-	inspect, err := t.dockerClient.ContainerExecInspect(ctx, id)
+	exitCode, err := t.sandbox.ExecResult(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect exec process: %w", err)
 	}
@@ -343,9 +341,9 @@ func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Du
 	if results == "" {
 		results = "[no output]"
 	}
-	results = fmt.Sprintf("%s\n[exit code: %d]", results, inspect.ExitCode)
+	results = fmt.Sprintf("%s\n[exit code: %d]", results, exitCode)
 
-	if inspect.ExitCode > 128 && errors.Is(t.requireRunningContainer(ctx), errContainerNotOperational) {
+	if exitCode > 128 && errors.Is(t.requireRunningContainer(ctx), errContainerNotOperational) {
 		results += "\n[interrupted: the sandbox container stopped]"
 	}
 
@@ -353,7 +351,7 @@ func (t *terminal) getExecResult(ctx context.Context, id string, timeout time.Du
 }
 
 func (t *terminal) requireRunningContainer(ctx context.Context) error {
-	isRunning, err := t.dockerClient.IsContainerRunning(ctx, t.containerLID)
+	isRunning, err := t.sandbox.IsRunning(ctx, t.containerLID)
 	if err != nil {
 		return fmt.Errorf("runtime verification failed: %w", err)
 	}
@@ -438,7 +436,7 @@ func (t *terminal) readFileFromContainer(ctx context.Context, flowID int64, path
 		return "", err
 	}
 
-	reader, stats, err := t.dockerClient.CopyFromContainer(ctx, containerName, path)
+	reader, stats, err := t.sandbox.CopyOut(ctx, containerName, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to copy file: %w", err)
 	}
@@ -549,9 +547,7 @@ func (t *terminal) writeFileToContainer(ctx context.Context, flowID int64, path,
 	}
 
 	dir := filepath.Dir(path)
-	err = t.dockerClient.CopyToContainer(ctx, containerName, dir, tarBuffer, client.CopyToContainerOptions{
-		AllowOverwriteDirWithFile: true,
-	})
+	err = t.sandbox.CopyIn(ctx, containerName, dir, tarBuffer)
 	if err != nil {
 		return fmt.Errorf("container file transfer failed: %w", err)
 	}
@@ -610,7 +606,7 @@ func PrimaryTerminalName(tenantPrefix string, flowID int64) string {
 }
 
 func (t *terminal) IsAvailable() bool {
-	return t.dockerClient != nil
+	return t.sandbox != nil
 }
 
 func truncateString(s string, maxLen int) string {

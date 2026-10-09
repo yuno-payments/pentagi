@@ -9,7 +9,7 @@ import (
 	"pentagi/cmd/ftester/mocks"
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
-	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/graphiti"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/embeddings"
@@ -87,7 +87,7 @@ type toolExecutor struct {
 	replacer       anonymizer.Replacer
 	cfg            *config.Config
 	db             database.Querier
-	dockerClient   docker.DockerClient
+	sandbox        executor.FlowExecutor
 	handlers       providers.FlowProviderHandlers
 	store          *pgvector.Store
 	embedder       embeddings.Embedder
@@ -104,7 +104,7 @@ func newToolExecutor(
 	flowExecutor tools.FlowToolsExecutor,
 	cfg *config.Config,
 	db database.Querier,
-	dockerClient docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	handlers providers.FlowProviderHandlers,
 	proxies mocks.ProxyProviders,
 	userID, flowID int64,
@@ -145,7 +145,7 @@ func newToolExecutor(
 		replacer:       replacer,
 		cfg:            cfg,
 		db:             db,
-		dockerClient:   dockerClient,
+		sandbox:        sandbox,
 		handlers:       handlers,
 		store:          store,
 		embedder:       embedder,
@@ -184,7 +184,7 @@ func (te *toolExecutor) GetTool(ctx context.Context, funcName string) (tools.Too
 			containerID,
 			containerLID,
 			te.cfg.TenantPrefix(),
-			te.dockerClient,
+			te.sandbox,
 			te.proxies.GetTermLogProvider(),
 			time.Duration(te.cfg.TerminalToolTimeout)*time.Second,
 		), nil
@@ -198,7 +198,7 @@ func (te *toolExecutor) GetTool(ctx context.Context, funcName string) (tools.Too
 			containerID,
 			containerLID,
 			te.cfg.TenantPrefix(),
-			te.dockerClient,
+			te.sandbox,
 			te.proxies.GetTermLogProvider(),
 			time.Duration(te.cfg.TerminalToolTimeout)*time.Second,
 		), nil

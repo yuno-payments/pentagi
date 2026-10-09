@@ -18,7 +18,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/csum"
 	"pentagi/pkg/database"
-	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/graphiti"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/observability/langfuse"
@@ -143,7 +143,7 @@ type ProviderController interface {
 type providerController struct {
 	db             database.Querier
 	cfg            *config.Config
-	docker         docker.DockerClient
+	sandbox        executor.FlowExecutor
 	embedder       embeddings.Embedder
 	graphitiClient *graphiti.Client
 
@@ -189,7 +189,7 @@ func buildDefaultConfigs(
 func NewProviderController(
 	cfg *config.Config,
 	db database.Querier,
-	docker docker.DockerClient,
+	sandbox executor.FlowExecutor,
 ) (ProviderController, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
@@ -263,7 +263,7 @@ func NewProviderController(
 	pc := &providerController{
 		db:             db,
 		cfg:            cfg,
-		docker:         docker,
+		sandbox:        sandbox,
 		embedder:       embedder,
 		graphitiClient: graphitiClient,
 
@@ -313,12 +313,12 @@ func (pc *providerController) NewFlowProvider(
 		return nil, fmt.Errorf("failed to get provider: %w", err)
 	}
 
-	policy := newImagePolicy(pc.cfg, pc.docker.GetDefaultImage())
+	policy := newImagePolicy(pc.cfg, pc.sandbox.DefaultImage())
 
 	image := policy.pentestImage()
 	if !policy.skipsModel() {
 		imageTmpl, err := prompter.RenderTemplate(templates.PromptTypeImageChooser, map[string]any{
-			"DefaultImage":           pc.docker.GetDefaultImage(),
+			"DefaultImage":           pc.sandbox.DefaultImage(),
 			"DefaultImageForPentest": pc.cfg.DockerDefaultImageForPentest,
 			"Input":                  input,
 		})
@@ -381,6 +381,7 @@ func (pc *providerController) NewFlowProvider(
 		cfg:             pc.cfg,
 		embedder:        pc.embedder,
 		graphitiClient:  pc.graphitiClient,
+		sandbox:         pc.sandbox,
 		flowID:          flowID,
 		callCounter:     newAtomicInt64(pc.startCallNumber.Add(deltaCallCounter)),
 		image:           image,
@@ -431,6 +432,7 @@ func (pc *providerController) LoadFlowProvider(
 		cfg:             pc.cfg,
 		embedder:        pc.embedder,
 		graphitiClient:  pc.graphitiClient,
+		sandbox:         pc.sandbox,
 		flowID:          flowID,
 		callCounter:     newAtomicInt64(pc.startCallNumber.Add(deltaCallCounter)),
 		image:           image,
@@ -526,6 +528,7 @@ func (pc *providerController) NewAssistantProvider(
 			cfg:             pc.cfg,
 			embedder:        pc.embedder,
 			graphitiClient:  pc.graphitiClient,
+			sandbox:         pc.sandbox,
 			flowID:          flowID,
 			callCounter:     newAtomicInt64(pc.startCallNumber.Add(deltaCallCounter)),
 			image:           image,
@@ -579,6 +582,7 @@ func (pc *providerController) LoadAssistantProvider(
 			cfg:             pc.cfg,
 			embedder:        pc.embedder,
 			graphitiClient:  pc.graphitiClient,
+			sandbox:         pc.sandbox,
 			flowID:          flowID,
 			callCounter:     newAtomicInt64(pc.startCallNumber.Add(deltaCallCounter)),
 			image:           image,

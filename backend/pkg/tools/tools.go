@@ -19,13 +19,13 @@ import (
 	"pentagi/pkg/database/knowledge/limits"
 	"pentagi/pkg/database/knowledge/vectorstore"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graph/model"
 	"pentagi/pkg/graphiti"
 	"pentagi/pkg/providers/embeddings"
 	"pentagi/pkg/schema"
 
-	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 	"github.com/vxcontrol/cloud/anonymizer"
 	"github.com/vxcontrol/cloud/anonymizer/patterns"
@@ -181,7 +181,7 @@ type flowToolsExecutor struct {
 	store          *pgvector.Store
 	graphitiClient *graphiti.Client
 	image          string
-	docker         docker.DockerClient
+	sandbox        executor.FlowExecutor
 	primaryID      int64
 	primaryLID     string
 	functions      *Functions
@@ -366,7 +366,7 @@ var (
 func NewFlowToolsExecutor(
 	db database.Querier,
 	cfg *config.Config,
-	docker docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	functions *Functions,
 	userID, flowID int64,
 ) (FlowToolsExecutor, error) {
@@ -389,7 +389,7 @@ func NewFlowToolsExecutor(
 
 	return &flowToolsExecutor{
 		db:          db,
-		docker:      docker,
+		sandbox:     sandbox,
 		functions:   functions,
 		replacer:    sharedReplacer,
 		cfg:         cfg,
@@ -485,7 +485,7 @@ func (fte *flowToolsExecutor) Prepare(ctx context.Context) error {
 		isProbed := cnt.Status == database.ContainerStatusRunning ||
 			cnt.Status == database.ContainerStatusFailed && cnt.LocalID.String != ""
 		if isProbed {
-			running, err := fte.docker.IsContainerRunning(ctx, cnt.LocalID.String)
+			running, err := fte.sandbox.IsRunning(ctx, cnt.LocalID.String)
 			if err != nil {
 				return fmt.Errorf("failed to inspect container '%s': %w", containerName, err)
 			}
@@ -509,25 +509,20 @@ func (fte *flowToolsExecutor) Prepare(ctx context.Context) error {
 			}
 		}
 
-		if err := fte.docker.RemoveContainer(ctx, cnt.LocalID.String, cnt.ID); err != nil {
+		if err := fte.sandbox.RemoveSandbox(ctx, cnt.LocalID.String, cnt.ID); err != nil {
 			logrus.WithContext(ctx).WithError(err).WithFields(enrichLogrusFields(fte.flowID, nil, nil, logrus.Fields{
 				"container_name": containerName,
 			})).Warn("failed to remove stale primary container before rebuild")
 		}
 	}
 
-	// Shared with the startup sandbox check, so the container it measures is the
-	// container agents get.
-	workerConfig, workerHostConfig := docker.WorkerSpec(fte.cfg, fte.image)
-
 	containerName := PrimaryTerminalName(fte.cfg.TenantPrefix(), fte.flowID)
-	cnt, err := fte.docker.RunContainer(
+	cnt, err := fte.sandbox.RunSandbox(
 		ctx,
 		containerName,
 		database.ContainerTypePrimary,
 		fte.flowID,
-		workerConfig,
-		workerHostConfig,
+		executor.ContainerSpec{Image: fte.image},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to launch container '%s': %w", containerName, err)
@@ -647,7 +642,7 @@ func (fte *flowToolsExecutor) findMissingInContainer(ctx context.Context, entrie
 	}
 
 	containerName := PrimaryTerminalName(fte.cfg.TenantPrefix(), fte.flowID)
-	createResp, err := fte.docker.ContainerExecCreate(ctx, containerName, client.ExecCreateOptions{
+	execID, err := fte.sandbox.Exec(ctx, containerName, executor.ExecSpec{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -656,21 +651,21 @@ func (fte *flowToolsExecutor) findMissingInContainer(ctx context.Context, entrie
 		return nil, fmt.Errorf("failed to create file-check exec: %w", err)
 	}
 
-	resp, err := fte.docker.ContainerExecAttach(ctx, createResp.ID, client.ExecAttachOptions{})
+	stream, err := fte.sandbox.ExecAttach(ctx, execID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to attach file-check exec: %w", err)
 	}
-	output, readErr := io.ReadAll(resp.Reader)
-	resp.Close()
+	output, readErr := io.ReadAll(stream.Stdout())
+	stream.Close()
 	if readErr != nil {
 		return nil, fmt.Errorf("failed to read file-check output: %w", readErr)
 	}
-	inspect, err := fte.docker.ContainerExecInspect(ctx, createResp.ID)
+	exitCode, err := fte.sandbox.ExecResult(ctx, execID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect file-check exec: %w", err)
 	}
-	if inspect.ExitCode != 0 {
-		return nil, fmt.Errorf("file-check exec failed with exit code %d: %s", inspect.ExitCode, strings.TrimSpace(string(output)))
+	if exitCode != 0 {
+		return nil, fmt.Errorf("file-check exec failed with exit code %d: %s", exitCode, strings.TrimSpace(string(output)))
 	}
 
 	byContainerPath := make(map[string]fileSyncEntry, len(entries))
@@ -701,8 +696,7 @@ func (fte *flowToolsExecutor) copyEntriesToContainer(ctx context.Context, entrie
 	}()
 
 	containerName := PrimaryTerminalName(fte.cfg.TenantPrefix(), fte.flowID)
-	copyErr := fte.docker.CopyToContainer(ctx, containerName, docker.WorkFolderPathInContainer, pr,
-		client.CopyToContainerOptions{AllowOverwriteDirWithFile: true})
+	copyErr := fte.sandbox.CopyIn(ctx, containerName, docker.WorkFolderPathInContainer, pr)
 	pr.Close()
 	writeErr := <-errCh
 
@@ -754,7 +748,7 @@ func (fte *flowToolsExecutor) Release(ctx context.Context) error {
 	}
 
 	// TODO: here better to get flow containers list and purge all of them
-	if err := fte.docker.RemoveContainer(ctx, fte.primaryLID, fte.primaryID); err != nil {
+	if err := fte.sandbox.RemoveSandbox(ctx, fte.primaryLID, fte.primaryID); err != nil {
 		containerName := PrimaryTerminalName(fte.cfg.TenantPrefix(), fte.flowID)
 		return fmt.Errorf("failed to purge container '%s': %w", containerName, err)
 	}
@@ -843,7 +837,7 @@ func (fte *flowToolsExecutor) GetAssistantExecutor(cfg AssistantExecutorConfig) 
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1096,7 +1090,7 @@ func (fte *flowToolsExecutor) GetInstallerExecutor(cfg InstallerExecutorConfig) 
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1204,7 +1198,7 @@ func (fte *flowToolsExecutor) GetCoderExecutor(cfg CoderExecutorConfig) (Context
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1330,7 +1324,7 @@ func (fte *flowToolsExecutor) GetPentesterExecutor(cfg PentesterExecutorConfig) 
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1525,7 +1519,7 @@ func (fte *flowToolsExecutor) GetGeneratorExecutor(cfg GeneratorExecutorConfig) 
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1595,7 +1589,7 @@ func (fte *flowToolsExecutor) GetRefinerExecutor(cfg RefinerExecutorConfig) (Con
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1661,7 +1655,7 @@ func (fte *flowToolsExecutor) GetMemoristExecutor(cfg MemoristExecutorConfig) (C
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)
@@ -1736,7 +1730,7 @@ func (fte *flowToolsExecutor) GetEnricherExecutor(cfg EnricherExecutorConfig) (C
 		container.ID,
 		container.LocalID.String,
 		fte.cfg.TenantPrefix(),
-		fte.docker,
+		fte.sandbox,
 		fte.tlp,
 		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
 	)

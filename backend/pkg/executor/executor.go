@@ -83,6 +83,7 @@ type PathStat struct {
 
 // EntryError is a single failed entry during a directory listing.
 type EntryError struct {
+	Name string
 	Path string
 	Err  string
 }

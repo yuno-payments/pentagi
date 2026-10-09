@@ -14,6 +14,7 @@ import (
 	"pentagi/pkg/csum"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graphiti"
 	obs "pentagi/pkg/observability"
@@ -141,6 +142,7 @@ type flowProvider struct {
 
 	embedder       embeddings.Embedder
 	graphitiClient *graphiti.Client
+	sandbox        executor.FlowExecutor
 
 	flowID int64
 

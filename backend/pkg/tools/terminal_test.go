@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -70,7 +72,7 @@ func TestTerminal_Handle_RejectsACallItCannotDispatch(t *testing.T) {
 			mock := &fakeDockerClient{isRunning: true}
 			term := terminalFor(mock, &recordingTermLog{})
 			if tt.noDocker {
-				term.dockerClient = nil
+				term.sandbox = nil
 			}
 
 			result, err := term.Handle(t.Context(), tt.tool, json.RawMessage(tt.args))
@@ -1161,7 +1163,7 @@ func terminalFor(dc docker.DockerClient, tlp TermLogProvider) *terminal {
 		flowID:       1,
 		containerID:  7,
 		containerLID: "test-container",
-		dockerClient: dc,
+		sandbox:      dockerbackend.New(dc, &config.Config{}),
 		tlp:          tlp,
 	}
 }

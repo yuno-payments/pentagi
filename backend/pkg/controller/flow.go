@@ -16,6 +16,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graph/model"
 	"pentagi/pkg/graph/subscriptions"
@@ -27,7 +28,6 @@ import (
 	"pentagi/pkg/resources"
 	"pentagi/pkg/tools"
 
-	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 )
 
@@ -74,7 +74,7 @@ type flowWorker struct {
 	taskCCH   chan struct{}
 	input     chan flowInput
 	flowCtx   *FlowContext
-	docker    docker.DockerClient
+	sandbox   executor.FlowExecutor
 	logger    *logrus.Entry
 }
 
@@ -91,11 +91,11 @@ type newFlowWorkerCtx struct {
 }
 
 type flowWorkerCtx struct {
-	db     database.Querier
-	cfg    *config.Config
-	docker docker.DockerClient
-	provs  providers.ProviderController
-	subs   subscriptions.SubscriptionsController
+	db      database.Querier
+	cfg     *config.Config
+	sandbox executor.FlowExecutor
+	provs   providers.ProviderController
+	subs    subscriptions.SubscriptionsController
 
 	flowProviderControllers
 }
@@ -214,7 +214,7 @@ func buildFlowWorker(
 	if err != nil {
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to build user prompter", err)
 	}
-	executor, err := tools.NewFlowToolsExecutor(fwc.db, fwc.cfg, fwc.docker, fwc.functions, fwc.userID, flow.ID)
+	executor, err := tools.NewFlowToolsExecutor(fwc.db, fwc.cfg, fwc.sandbox, fwc.functions, fwc.userID, flow.ID)
 	if err != nil {
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to create flow tools executor", err)
 	}
@@ -292,7 +292,7 @@ func buildFlowWorker(
 		taskCCH: make(chan struct{}),
 		input:   make(chan flowInput),
 		flowCtx: flowCtx,
-		docker:  fwc.docker,
+		sandbox: fwc.sandbox,
 		logger: logrus.WithFields(logrus.Fields{
 			"flow_id":   flow.ID,
 			"user_id":   fwc.userID,
@@ -398,7 +398,7 @@ func LoadFlowWorker(ctx context.Context, flow database.Flow, fwc flowWorkerCtx) 
 	if err != nil {
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to build user prompter", err)
 	}
-	executor, err := tools.NewFlowToolsExecutor(fwc.db, fwc.cfg, fwc.docker, functions, flow.UserID, flow.ID)
+	executor, err := tools.NewFlowToolsExecutor(fwc.db, fwc.cfg, fwc.sandbox, functions, flow.UserID, flow.ID)
 	if err != nil {
 		return nil, wrapErrorEndSpan(ctx, flowSpan, "failed to create flow tools executor", err)
 	}
@@ -460,7 +460,7 @@ func LoadFlowWorker(ctx context.Context, flow database.Flow, fwc flowWorkerCtx) 
 		taskCCH: make(chan struct{}),
 		input:   make(chan flowInput),
 		flowCtx: flowCtx,
-		docker:  fwc.docker,
+		sandbox: fwc.sandbox,
 		logger: logrus.WithFields(logrus.Fields{
 			"flow_id":   flow.ID,
 			"user_id":   flow.UserID,
@@ -775,11 +775,11 @@ func (fw *flowWorker) copyResourcesToFS(dbResources []database.UserResource) ([]
 // pushResourcesToContainer pushes newly added resource files into the running primary container.
 // Each file is sent individually so partial failures are non-fatal.
 func (fw *flowWorker) pushResourcesToContainer(ctx context.Context, addedPaths []string) {
-	if fw.docker == nil {
+	if fw.sandbox == nil {
 		return
 	}
 	containerName := tools.PrimaryTerminalName(fw.cfg.TenantPrefix(), fw.flowCtx.FlowID)
-	running, _ := fw.docker.IsContainerRunning(ctx, containerName)
+	running, _ := fw.sandbox.IsRunning(ctx, containerName)
 	if !running {
 		return
 	}
@@ -795,8 +795,7 @@ func (fw *flowWorker) pushResourcesToContainer(ctx context.Context, addedPaths [
 			errCh <- flowfiles.WriteSingleFileTar(pw, absPath, flowfiles.ResourcesDirName+"/"+fsRelPath)
 		}()
 
-		copyErr := fw.docker.CopyToContainer(ctx, containerName, docker.WorkFolderPathInContainer, pr,
-			client.CopyToContainerOptions{AllowOverwriteDirWithFile: true})
+		copyErr := fw.sandbox.CopyIn(ctx, containerName, docker.WorkFolderPathInContainer, pr)
 		pr.Close()
 		writeErr := <-errCh
 
@@ -904,12 +903,12 @@ func (fw *flowWorker) Stop(ctx context.Context) error {
 }
 
 func (fw *flowWorker) killFlowCommands(ctx context.Context) {
-	if fw.docker == nil {
+	if fw.sandbox == nil {
 		return
 	}
 
 	containerName := tools.PrimaryTerminalName(fw.cfg.TenantPrefix(), fw.flowCtx.FlowID)
-	if err := fw.docker.KillFlowCommands(ctx, containerName); err != nil {
+	if err := fw.sandbox.KillFlowCommands(ctx, containerName); err != nil {
 		fw.logger.WithError(err).Warn("failed to stop the commands left running in the sandbox")
 	}
 }

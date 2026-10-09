@@ -13,6 +13,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/provider"
@@ -560,7 +561,7 @@ func (d *sandboxFakeDocker) sweeps() []string {
 func newStoppableWorker(dkr docker.DockerClient) *flowWorker {
 	return &flowWorker{
 		cfg:     &config.Config{},
-		docker:  dkr,
+		sandbox: dockerbackend.New(dkr, &config.Config{}),
 		taskMX:  &sync.Mutex{},
 		taskST:  func() {},
 		taskWG:  &sync.WaitGroup{},

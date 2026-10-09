@@ -130,7 +130,7 @@ func (fc *flowController) releaseFlowContainers(
 			continue
 		}
 
-		if err := fc.docker.RemoveContainer(ctx, container.LocalID.String, container.ID); err != nil {
+		if err := fc.sandbox.RemoveSandbox(ctx, container.LocalID.String, container.ID); err != nil {
 			logrus.WithContext(ctx).WithError(err).
 				Warnf("failed to release container %d of flow %d", container.ID, flowID)
 			continue

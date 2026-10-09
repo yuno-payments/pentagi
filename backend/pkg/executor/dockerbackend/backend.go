@@ -134,13 +134,13 @@ func (b *Backend) ListDir(ctx context.Context, id, dir string) (executor.DirList
 		if fe.Err != nil {
 			msg = fe.Err.Error()
 		}
-		out.Failures = append(out.Failures, executor.EntryError{Path: fe.Path, Err: msg})
+		out.Failures = append(out.Failures, executor.EntryError{Name: fe.Name, Path: fe.Path, Err: msg})
 	}
 	return out, nil
 }
 
 func (b *Backend) CopyIn(ctx context.Context, id, dstDir string, tar io.Reader) error {
-	return b.client.CopyToContainer(ctx, id, dstDir, tar, client.CopyToContainerOptions{})
+	return b.client.CopyToContainer(ctx, id, dstDir, tar, client.CopyToContainerOptions{AllowOverwriteDirWithFile: true})
 }
 
 func (b *Backend) CopyOut(ctx context.Context, id, srcPath string) (io.ReadCloser, executor.PathStat, error) {

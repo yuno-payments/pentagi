@@ -25,6 +25,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/database/knowledge/limits"
+	"pentagi/pkg/executor/dockerbackend"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graphiti"
 	"pentagi/pkg/providers/embeddings"
@@ -167,7 +168,7 @@ func TestTools_Prepare_KeepsOrReplacesTheSandbox(t *testing.T) {
 				removeErr: tc.removeErr,
 				launchErr: tc.launchErr,
 			}
-			fte := &flowToolsExecutor{db: db, cfg: &config.Config{DataDir: t.TempDir()}, docker: docker, flowID: 42}
+			fte := &flowToolsExecutor{db: db, cfg: &config.Config{DataDir: t.TempDir()}, sandbox: dockerbackend.New(docker, &config.Config{}), flowID: 42}
 
 			err := fte.Prepare(t.Context())
 
@@ -213,7 +214,7 @@ func TestTools_Prepare_LaunchesTheSandboxWithTheCapabilityAllowList(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			docker := &fakeDockerClient{}
 			cfg := &config.Config{DataDir: t.TempDir(), TenantID: tc.tenant, DockerNetAdmin: tc.netAdmin}
-			executor, err := NewFlowToolsExecutor(&fakeContainerDB{}, cfg, docker, nil, 1, 42)
+			executor, err := NewFlowToolsExecutor(&fakeContainerDB{}, cfg, dockerbackend.New(docker, cfg), nil, 1, 42)
 			require.NoError(t, err)
 			executor.SetImage("vxcontrol/kali-linux:test")
 
@@ -367,7 +368,7 @@ func TestTools_Prepare_SyncsTheFilesTheSandboxLacks(t *testing.T) {
 				copyToErr:      tc.copyErr,
 			}
 			fte := &flowToolsExecutor{
-				db: &fakeContainerDB{row: tc.row}, cfg: &config.Config{DataDir: dataDir}, docker: docker, flowID: 42,
+				db: &fakeContainerDB{row: tc.row}, cfg: &config.Config{DataDir: dataDir}, sandbox: dockerbackend.New(docker, &config.Config{}), flowID: 42,
 			}
 
 			done := make(chan error, 1)
@@ -437,7 +438,7 @@ func TestTools_Release_RemovesTheSandboxAndClosesOnlyAStoreItOwns(t *testing.T) 
 			conn := &fakeVectorConn{}
 			docker := &fakeDockerClient{removeErr: tc.removeErr}
 			fte := &flowToolsExecutor{
-				cfg: &config.Config{}, docker: docker, flowID: 42,
+				cfg: &config.Config{}, sandbox: dockerbackend.New(docker, &config.Config{}), flowID: 42,
 				primaryID: 7, primaryLID: "primary", store: newFakeVectorStore(t, conn, &fakeEmbedder{}),
 			}
 			if tc.sharedPool {
@@ -803,7 +804,7 @@ func toolsAgentFlow(t *testing.T, everyService bool) *flowToolsExecutor {
 		flowID:   42,
 		cfg:      &config.Config{},
 		db:       &fakeContainerDB{row: toolsSandboxRow(database.ContainerStatusRunning, "primary")},
-		docker:   &fakeDockerClient{},
+		sandbox:  dockerbackend.New(&fakeDockerClient{}, &config.Config{}),
 		replacer: identityReplacer{},
 	}
 	if !everyService {
@@ -912,7 +913,7 @@ func TestTools_GetExecutors_BindTheTerminalToTheFlowSandbox(t *testing.T) {
 				readFileContent: "10.0.0.7 target",
 			}
 			termLog := &recordingTermLog{}
-			fte.docker, fte.tlp = docker, termLog
+			fte.sandbox, fte.tlp = dockerbackend.New(docker, &config.Config{}), termLog
 
 			executor, err := tc.build(fte, false, "")
 			require.NoError(t, err)

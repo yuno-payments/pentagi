@@ -73,7 +73,7 @@ func (b *Backend) ListDir(ctx context.Context, id, dir string) (executor.DirList
 	for _, e := range entries {
 		st, statErr := b.StatPath(ctx, id, e)
 		if statErr != nil {
-			listing.Failures = append(listing.Failures, executor.EntryError{Path: e, Err: statErr.Error()})
+			listing.Failures = append(listing.Failures, executor.EntryError{Name: path.Base(e), Path: e, Err: statErr.Error()})
 			continue
 		}
 		listing.Files = append(listing.Files, st)

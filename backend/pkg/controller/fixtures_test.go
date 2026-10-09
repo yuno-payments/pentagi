@@ -12,6 +12,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 	"pentagi/pkg/graph/subscriptions"
 	"pentagi/pkg/graphiti"
 	"pentagi/pkg/providers"
@@ -326,11 +327,11 @@ func newFinishController(q database.Querier) (*flowController, *cascadeFakePubli
 	dkr := &finishFakeDocker{}
 
 	return &flowController{
-		db:     q,
-		mx:     &sync.Mutex{},
-		flows:  map[int64]*flowEntry{},
-		subs:   &cascadeFakeSubscriptions{pub: pub},
-		docker: dkr,
+		db:      q,
+		mx:      &sync.Mutex{},
+		flows:   map[int64]*flowEntry{},
+		subs:    &cascadeFakeSubscriptions{pub: pub},
+		sandbox: dockerbackend.New(dkr, &config.Config{}),
 	}, pub, dkr
 }
 

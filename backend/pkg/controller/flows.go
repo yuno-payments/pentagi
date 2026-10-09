@@ -10,7 +10,7 @@ import (
 
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
-	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/graph/subscriptions"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/provider"
@@ -125,21 +125,21 @@ func (e *flowEntry) available() bool {
 }
 
 type flowController struct {
-	db     database.Querier
-	mx     *sync.Mutex
-	cfg    *config.Config
-	flows  map[int64]*flowEntry
-	docker docker.DockerClient
-	provs  providers.ProviderController
-	subs   subscriptions.SubscriptionsController
-	alc    AgentLogController
-	mlc    MsgLogController
-	aslc   AssistantLogController
-	slc    SearchLogController
-	tlc    TermLogController
-	vslc   VectorStoreLogController
-	tclc   ToolCallLogController
-	sc     ScreenshotController
+	db      database.Querier
+	mx      *sync.Mutex
+	cfg     *config.Config
+	flows   map[int64]*flowEntry
+	sandbox executor.FlowExecutor
+	provs   providers.ProviderController
+	subs    subscriptions.SubscriptionsController
+	alc     AgentLogController
+	mlc     MsgLogController
+	aslc    AssistantLogController
+	slc     SearchLogController
+	tlc     TermLogController
+	vslc    VectorStoreLogController
+	tclc    ToolCallLogController
+	sc      ScreenshotController
 
 	build func(ctx context.Context, flow database.Flow, fwc newFlowWorkerCtx, commit func() error) (FlowWorker, error)
 }
@@ -147,27 +147,27 @@ type flowController struct {
 func NewFlowController(
 	db database.Querier,
 	cfg *config.Config,
-	docker docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	provs providers.ProviderController,
 	subs subscriptions.SubscriptionsController,
 ) FlowController {
 	return &flowController{
-		db:     db,
-		mx:     &sync.Mutex{},
-		cfg:    cfg,
-		flows:  make(map[int64]*flowEntry),
-		docker: docker,
-		provs:  provs,
-		subs:   subs,
-		alc:    NewAgentLogController(db),
-		mlc:    NewMsgLogController(db),
-		aslc:   NewAssistantLogController(db),
-		slc:    NewSearchLogController(db),
-		tlc:    NewTermLogController(db),
-		vslc:   NewVectorStoreLogController(db),
-		tclc:   NewToolCallLogController(db),
-		sc:     NewScreenshotController(db),
-		build:  buildFlowWorker,
+		db:      db,
+		mx:      &sync.Mutex{},
+		cfg:     cfg,
+		flows:   make(map[int64]*flowEntry),
+		sandbox: sandbox,
+		provs:   provs,
+		subs:    subs,
+		alc:     NewAgentLogController(db),
+		mlc:     NewMsgLogController(db),
+		aslc:    NewAssistantLogController(db),
+		slc:     NewSearchLogController(db),
+		tlc:     NewTermLogController(db),
+		vslc:    NewVectorStoreLogController(db),
+		tclc:    NewToolCallLogController(db),
+		sc:      NewScreenshotController(db),
+		build:   buildFlowWorker,
 	}
 }
 
@@ -384,11 +384,11 @@ func (fc *flowController) failFlow(ctx context.Context, flow database.Flow, caus
 
 func (fc *flowController) flowWorkerCtx() flowWorkerCtx {
 	return flowWorkerCtx{
-		db:     fc.db,
-		cfg:    fc.cfg,
-		docker: fc.docker,
-		provs:  fc.provs,
-		subs:   fc.subs,
+		db:      fc.db,
+		cfg:     fc.cfg,
+		sandbox: fc.sandbox,
+		provs:   fc.provs,
+		subs:    fc.subs,
 		flowProviderControllers: flowProviderControllers{
 			mlc:  fc.mlc,
 			aslc: fc.aslc,

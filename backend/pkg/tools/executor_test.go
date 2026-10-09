@@ -19,6 +19,7 @@ import (
 	"pentagi/pkg/cast"
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
+	"pentagi/pkg/executor/dockerbackend"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/observability/langfuse"
 
@@ -672,11 +673,11 @@ func TestExecutor_Execute_AnonymizesWhatEveryAgentStoresInMemory(t *testing.T) {
 				flowID: 1,
 				cfg:    &config.Config{},
 				db:     &fakeContainerDB{row: &database.Container{ID: 1, LocalID: sql.NullString{String: "primary", Valid: true}}},
-				docker: &fakeDockerClient{
+				sandbox: dockerbackend.New(&fakeDockerClient{
 					isRunning:      true,
 					execCreateResp: client.ExecCreateResult{ID: "exec"},
 					attachOutput:   []byte("inet " + secretHost + "/24 scope global eth0"),
-				},
+				}, &config.Config{}),
 				tlp:      &recordingTermLog{},
 				mlp:      &executorMsgLog{},
 				tclp:     &executorToolCallLog{},
