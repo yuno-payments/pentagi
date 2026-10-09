@@ -66,6 +66,18 @@ type Config struct {
 	DockerDefaultImage           string `env:"DOCKER_DEFAULT_IMAGE" envDefault:"debian:latest"`
 	DockerDefaultImageForPentest string `env:"DOCKER_DEFAULT_IMAGE_FOR_PENTEST" envDefault:"vxcontrol/kali-linux"`
 
+	// Executor backend selection. "docker" (default) keeps the Docker sandbox
+	// path unchanged; "kubernetes" runs each flow's sandbox as a Pod via the k8s
+	// API (pkg/executor/k8sbackend) with no DinD and no host Docker socket.
+	ExecutorBackend           string `env:"EXECUTOR_BACKEND" envDefault:"docker"`
+	K8sNamespace              string `env:"K8S_NAMESPACE" envDefault:"pentagi-flows"`
+	K8sInCluster              bool   `env:"K8S_IN_CLUSTER" envDefault:"true"`
+	K8sSandboxImagePullSecret string `env:"K8S_SANDBOX_IMAGE_PULL_SECRET"`
+	// K8sOOBPortBase bases the per-flow OOB ports; default 30000 keeps them in
+	// the standard NodePort range so no apiserver change is needed.
+	K8sOOBPortBase      int    `env:"K8S_OOB_PORT_BASE" envDefault:"30000"`
+	K8sOOBAdvertiseHost string `env:"K8S_OOB_ADVERTISE_HOST"`
+
 	// DockerDefaultImageForTest is the worker the startup sandbox check runs in,
 	// and the image it pulls into the sandbox to prove an agent could. It is a
 	// small image on purpose: the check pays for it on every start.
