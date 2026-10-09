@@ -95,14 +95,23 @@ type DirListing struct {
 	Truncated bool
 }
 
-// OOBPort is one published out-of-band port for a flow: the port the agent
-// targets (Port) and the externally reachable address:port a callback connects
-// back to (Advertised). For the Docker backend Advertised is
-// DockerPublicIP:Port; for k8s it is the node/LB address and the Service's
-// mapped port.
+// OOBPort is one published out-of-band port for a flow, describing BOTH sides
+// of a reverse-shell/callback so the agent is never told an unreachable value:
+//
+//   - BindPort: the port a listener binds INSIDE the sandbox (0.0.0.0:BindPort).
+//   - AdvertiseHost:AdvertisePort: the externally reachable address the target's
+//     payload must call BACK to.
+//
+// Docker publishes host==container 1:1, so BindPort == AdvertisePort and
+// AdvertiseHost is DockerPublicIP. Kubernetes exposes the pod through a NodePort
+// Service with nodePort == targetPort == BindPort (a single number, like
+// Docker), reached at the node's InternalIP (or a configured override), so
+// AdvertisePort == BindPort while AdvertiseHost is the node/LB address — never
+// 0.0.0.0 and never the pod IP.
 type OOBPort struct {
-	Port       int
-	Advertised string
+	BindPort      int
+	AdvertiseHost string
+	AdvertisePort int
 }
 
 // FlowExecutor runs and drives a flow's sandbox. Implementations: the Docker
