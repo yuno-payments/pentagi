@@ -21,6 +21,9 @@ import (
 	"pentagi/pkg/controller"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
+	"pentagi/pkg/executor/dockerbackend"
+	"pentagi/pkg/executor/k8sbackend"
 	"pentagi/pkg/graph/subscriptions"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/observability/profiling"
@@ -218,23 +221,40 @@ func main() {
 		go profiling.Start(cfg.PprofAddr)
 	}
 
-	client, err := docker.NewDockerClient(ctx, queries, cfg)
-	if err != nil {
-		logrus.WithError(err).Fatal("Docker runtime client initialization failed")
+	var sandbox executor.FlowExecutor
+	if cfg.ExecutorBackend == "kubernetes" {
+		b, err := k8sbackend.New(ctx, queries, k8sbackend.Config{
+			Namespace:        cfg.K8sNamespace,
+			DefaultImage:     cfg.DockerDefaultImage,
+			ImagePullSecret:  cfg.K8sSandboxImagePullSecret,
+			NetAdmin:         cfg.DockerNetAdmin,
+			OOBPortBase:      cfg.K8sOOBPortBase,
+			OOBAdvertiseHost: cfg.K8sOOBAdvertiseHost,
+		})
+		if err != nil {
+			logrus.WithError(err).Fatal("Kubernetes executor backend initialization failed")
+		}
+		sandbox = b
+	} else {
+		client, err := docker.NewDockerClient(ctx, queries, cfg)
+		if err != nil {
+			logrus.WithError(err).Fatal("Docker runtime client initialization failed")
+		}
+		sandbox = dockerbackend.New(client, cfg)
 	}
 
-	providers, err := providers.NewProviderController(cfg, queries, client)
+	providers, err := providers.NewProviderController(cfg, queries, sandbox)
 	if err != nil {
 		logrus.WithError(err).Fatal("LLM provider controller initialization failed")
 	}
 	subscriptions := subscriptions.NewSubscriptionsController()
-	controller := controller.NewFlowController(queries, cfg, client, providers, subscriptions)
+	controller := controller.NewFlowController(queries, cfg, sandbox, providers, subscriptions)
 
 	if err := controller.LoadFlows(ctx); err != nil {
 		logrus.WithError(err).Fatal("Active flows restoration failed")
 	}
 
-	r := router.NewRouter(queries, orm, cfg, providers, controller, subscriptions, client, updates)
+	r := router.NewRouter(queries, orm, cfg, providers, controller, subscriptions, sandbox, updates)
 
 	// Launch HTTP/HTTPS server in background goroutine
 	serverErrChan := make(chan error, 1)

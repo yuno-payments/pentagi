@@ -8,7 +8,7 @@ import (
 	"pentagi/cmd/ftester/mocks"
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
-	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/observability/langfuse"
 	"pentagi/pkg/providers"
@@ -29,7 +29,7 @@ type tester struct {
 	db           database.Querier
 	cfg          *config.Config
 	ctx          context.Context
-	docker       docker.DockerClient
+	sandbox      executor.FlowExecutor
 	providers    providers.ProviderController
 	providerName provider.ProviderName
 	providerType provider.ProviderType
@@ -50,7 +50,7 @@ func NewTester(
 	db database.Querier,
 	cfg *config.Config,
 	ctx context.Context,
-	dockerClient docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	providerController providers.ProviderController,
 	flowID, userID int64,
 	taskID, subtaskID *int64,
@@ -66,7 +66,7 @@ func NewTester(
 	functions := &tools.Functions{}
 
 	// Initialize tools flowExecutor
-	flowExecutor, err := tools.NewFlowToolsExecutor(db, cfg, dockerClient, functions, userID, flowID)
+	flowExecutor, err := tools.NewFlowToolsExecutor(db, cfg, sandbox, functions, userID, flowID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create flow tools executor: %w", err)
 	}
@@ -87,7 +87,7 @@ func NewTester(
 
 	// Initialize tool executor
 	toolExecutor, err := newToolExecutor(
-		flowExecutor, cfg, db, dockerClient, nil, proxies,
+		flowExecutor, cfg, db, sandbox, nil, proxies,
 		userID, flowID, taskID, subtaskID, providerController.Embedder(),
 		providerController.GraphitiClient(),
 	)
@@ -99,7 +99,7 @@ func NewTester(
 		db:           db,
 		cfg:          cfg,
 		ctx:          ctx,
-		docker:       dockerClient,
+		sandbox:      sandbox,
 		providers:    providerController,
 		providerName: prvname,
 		providerType: prv.Type(),

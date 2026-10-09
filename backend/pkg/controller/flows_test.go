@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/provider"
@@ -249,12 +251,12 @@ func newCreatingController(t *testing.T, buildErr error) *creatingController {
 	}
 
 	c.fc = &flowController{
-		db:     q,
-		mx:     &sync.Mutex{},
-		flows:  map[int64]*flowEntry{},
-		subs:   &cascadeFakeSubscriptions{pub: pub},
-		docker: &finishFakeDocker{},
-		mlc:    NewMsgLogController(q),
+		db:      q,
+		mx:      &sync.Mutex{},
+		flows:   map[int64]*flowEntry{},
+		subs:    &cascadeFakeSubscriptions{pub: pub},
+		sandbox: dockerbackend.New(&finishFakeDocker{}, &config.Config{}),
+		mlc:     NewMsgLogController(q),
 		build: func(ctx context.Context, _ database.Flow, _ newFlowWorkerCtx, commit func() error) (FlowWorker, error) {
 			if c.commitsBeforeRelease {
 				if err := commit(); err != nil {
@@ -664,7 +666,7 @@ func newGatedController(t *testing.T) (*flowController, *gatedFlowWorker) {
 		entered:        make(chan string, 4),
 		release:        make(chan struct{}),
 	}
-	fc.docker = &gatedDocker{gated: gated}
+	fc.sandbox = dockerbackend.New(&gatedDocker{gated: gated}, &config.Config{})
 	fc.register(gatedFlowID, gated)
 	fc.register(otherFlowID, &noopFlowWorker{flowID: otherFlowID})
 
@@ -826,7 +828,7 @@ func newTearingDownController(t *testing.T) (*creatingController, *gatedFlowWork
 		entered:        make(chan string, 4),
 		release:        make(chan struct{}),
 	}
-	c.fc.docker = &gatedDocker{gated: gated}
+	c.fc.sandbox = dockerbackend.New(&gatedDocker{gated: gated}, &config.Config{})
 
 	return c, gated
 }
@@ -938,7 +940,7 @@ func TestFlows_FinishFlow_RunsTheQueuedTeardownsOfAnUnloadedFlowOneAtATime(t *te
 	for _, name := range []string{"a", "b", "c"} {
 		d.releases[name] = make(chan struct{})
 	}
-	fc.docker = d
+	fc.sandbox = dockerbackend.New(d, &config.Config{})
 	released := map[string]bool{}
 	release := func(name string) {
 		released[name] = true

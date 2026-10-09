@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,7 +207,7 @@ func (d *fakeDockerClient) ContainerExecCreate(
 }
 
 func (d *fakeDockerClient) ContainerExecAttach(
-	ctx context.Context, _ string, _ client.ExecAttachOptions,
+	ctx context.Context, _ string, opts client.ExecAttachOptions,
 ) (client.HijackedResponse, error) {
 	if d.attachErr != nil {
 		return client.HijackedResponse{}, d.attachErr
@@ -226,6 +227,15 @@ func (d *fakeDockerClient) ContainerExecAttach(
 
 	pr, pw := net.Pipe()
 	output, hold := d.attachOutput, d.attachHold
+	// Real docker multiplexes a non-TTY exec stream into 8-byte-headered frames
+	// (the executor's Docker backend demuxes them); a TTY stream is raw. Mirror
+	// that so the demuxed Stdout() the caller reads matches production.
+	if !opts.TTY && len(output) > 0 {
+		header := make([]byte, 8)
+		header[0] = 1 // stdout
+		binary.BigEndian.PutUint32(header[4:8], uint32(len(output)))
+		output = append(header, output...)
+	}
 	go func() {
 		_, _ = pw.Write(output)
 		if hold > 0 {

@@ -19,7 +19,7 @@ import (
 	"pentagi/pkg/database"
 	"pentagi/pkg/database/knowledge"
 	"pentagi/pkg/database/knowledge/vectorstore"
-	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/graph/subscriptions"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/server/auth"
@@ -119,7 +119,7 @@ func NewRouter(
 	providers providers.ProviderController,
 	controller controller.FlowController,
 	subscriptions subscriptions.SubscriptionsController,
-	dockerClient docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	updates *update.Service,
 ) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
@@ -207,7 +207,7 @@ func NewRouter(
 	providerService := services.NewProviderService(providers)
 	settingsService := services.NewSettingsService(cfg)
 	flowService := services.NewFlowService(orm, db, providers, controller, subscriptions)
-	flowFileService := services.NewFlowFileService(orm, cfg.DataDir, cfg.TenantPrefix(), dockerClient, subscriptions)
+	flowFileService := services.NewFlowFileService(orm, cfg.DataDir, cfg.TenantPrefix(), sandbox, subscriptions)
 	resourceService := services.NewResourceService(orm, cfg.DataDir, subscriptions)
 	taskService := services.NewTaskService(orm)
 	subtaskService := services.NewSubtaskService(orm)

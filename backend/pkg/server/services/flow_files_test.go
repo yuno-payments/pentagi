@@ -20,8 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
+	"pentagi/pkg/executor/dockerbackend"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graph/model"
 	"pentagi/pkg/graph/subscriptions"
@@ -68,7 +71,7 @@ func TestFlowFiles_ConvertModelFlowFile_CopiesEveryField(t *testing.T) {
 
 func TestFlowFiles_ConvertContainerFiles_JoinsTheBasePathAndSortsByName(t *testing.T) {
 	mtime := time.Now()
-	files := convertContainerFiles("/work", []container.PathStat{
+	files := convertContainerFiles("/work", []executor.PathStat{
 		{
 			Name:  "zeta.txt",
 			Size:  10,
@@ -652,7 +655,7 @@ func TestFlowFiles_UploadFlowFiles_StoresEachFileUnderUploadsOnly(t *testing.T) 
 			dataDir := t.TempDir()
 			ss := &flowFileCaptureSubscriptions{}
 			fakeDocker := &fakeDockerClient{running: tt.dockerRunning}
-			svc := NewFlowFileService(db, dataDir, "", fakeDocker, ss)
+			svc := NewFlowFileService(db, dataDir, "", dockerbackend.New(fakeDocker, &config.Config{}), ss)
 
 			if !tt.noFlow {
 				owner := tt.flowOwner
@@ -1127,7 +1130,7 @@ func TestFlowFiles_DeleteFlowFile_RemovesFromTheCacheAndTheContainer(t *testing.
 				execCreateErr:   tt.execCreateErr,
 				execInspectCode: tt.execInspectCode,
 			}
-			svc := NewFlowFileService(db, dataDir, "", fakeDocker, ss)
+			svc := NewFlowFileService(db, dataDir, "", dockerbackend.New(fakeDocker, &config.Config{}), ss)
 
 			if tt.seedFlow {
 				owner := tt.flowOwner
@@ -1950,7 +1953,11 @@ func TestFlowFiles_PullFlowFiles_ReportsEachPathSyncedFromTheContainer(t *testin
 			if !tt.dockerNil {
 				dockerClient = fakeDocker
 			}
-			svc := NewFlowFileService(db, dataDir, "", dockerClient, ss)
+			var sandbox executor.FlowExecutor
+			if dockerClient != nil {
+				sandbox = dockerbackend.New(fakeDocker, &config.Config{})
+			}
+			svc := NewFlowFileService(db, dataDir, "", sandbox, ss)
 
 			seedFlow(t, db, tt.flowID, tt.flowOwner)
 
@@ -2522,7 +2529,11 @@ func TestFlowFiles_GetFlowContainerFiles_ListsReadableEntriesAndSurfacesFailures
 			if !tt.dockerNil {
 				dockerClient = fakeDocker
 			}
-			svc := NewFlowFileService(db, dataDir, "", dockerClient, nil)
+			var sandbox executor.FlowExecutor
+			if dockerClient != nil {
+				sandbox = dockerbackend.New(fakeDocker, &config.Config{})
+			}
+			svc := NewFlowFileService(db, dataDir, "", sandbox, nil)
 
 			if tt.flowOwner != 0 {
 				seedFlow(t, db, tt.flowID, tt.flowOwner)

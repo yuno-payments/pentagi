@@ -883,6 +883,10 @@ func (fp *flowProvider) subtasksToMarkdown(subtasks []tools.SubtaskInfo) string 
 }
 
 func (fp *flowProvider) getContainerPortsDescription() string {
+	if fp.cfg.ExecutorBackend == "kubernetes" {
+		return fp.k8sContainerPortsDescription()
+	}
+
 	ports := docker.GetPrimaryContainerPorts(fp.cfg.WorkerPortsBase(), fp.flowID)
 	var buffer strings.Builder
 
@@ -1202,4 +1206,38 @@ func enrichLogrusFields(flowID int64, taskID, subtaskID *int64, fields logrus.Fi
 	}
 
 	return fields
+}
+
+// k8sContainerPortsDescription is the Kubernetes-backend OOB prompt. Unlike the
+// Docker backend (host port == container port, bound on a single public IP), a
+// per-flow NodePort Service maps a node address:port to the in-pod listener, so
+// the agent must bind INSIDE the sandbox but advertise the node address to the
+// target — never 0.0.0.0 or the pod IP.
+func (fp *flowProvider) k8sContainerPortsDescription() string {
+	var buffer strings.Builder
+	buffer.WriteString("**OOB Attack Infrastructure:**\n\n")
+
+	if fp.sandbox == nil {
+		buffer.WriteString("No OOB ports are available for this flow.\n")
+		return buffer.String()
+	}
+
+	oob := fp.sandbox.OOBPorts(fp.flowID)
+	buffer.WriteString("**MANDATORY PORTS - YOU MUST USE ONLY THESE:**\n\n")
+	for _, p := range oob {
+		fmt.Fprintf(&buffer,
+			"- Bind your listener INSIDE the sandbox to port %d (e.g. `nc -lvnp %d` on 0.0.0.0:%d), and set the payload callback / Metasploit LPORT to **%s:%d**\n",
+			p.BindPort, p.BindPort, p.BindPort, p.AdvertiseHost, p.AdvertisePort)
+	}
+
+	buffer.WriteString("\n**Port Usage Rules:**\n")
+	buffer.WriteString("- **YOU MUST use ONLY the ports listed above** for all listeners and reverse connections.\n")
+	buffer.WriteString("- The LISTENER binds inside the sandbox on the bind port; the TARGET must call back to the advertised node address:port, which is forwarded to your listener.\n")
+	buffer.WriteString("- **CRITICAL**: Do NOT advertise 0.0.0.0 or the pod's own IP to the target — only the node address shown above is reachable from outside the cluster.\n")
+	buffer.WriteString("- Standard ports like 4444, 8080, 9001 are NOT forwarded and will NOT work.\n")
+	if len(oob) > 0 {
+		fmt.Fprintf(&buffer, "- Example: for a Metasploit reverse shell, set LPORT bound to %d in the sandbox and LHOST=%s LPORT=%d in the payload.\n",
+			oob[0].BindPort, oob[0].AdvertiseHost, oob[0].AdvertisePort)
+	}
+	return buffer.String()
 }

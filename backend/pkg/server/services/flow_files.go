@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor"
 	"pentagi/pkg/flowfiles"
 	"pentagi/pkg/graph/model"
 	"pentagi/pkg/graph/subscriptions"
@@ -29,8 +30,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
 )
 
 // Local storage layout under {dataDir}/flow-{id}-data/:
@@ -58,7 +57,7 @@ type FlowFileService struct {
 	dataDir      string
 	tenantPrefix string
 	db           *gorm.DB
-	dockerClient docker.DockerClient
+	sandbox      executor.FlowExecutor
 	ss           subscriptions.SubscriptionsController
 }
 
@@ -66,14 +65,14 @@ func NewFlowFileService(
 	db *gorm.DB,
 	dataDir string,
 	tenantPrefix string,
-	dockerClient docker.DockerClient,
+	sandbox executor.FlowExecutor,
 	ss subscriptions.SubscriptionsController,
 ) *FlowFileService {
 	return &FlowFileService{
 		dataDir:      dataDir,
 		tenantPrefix: tenantPrefix,
 		db:           db,
-		dockerClient: dockerClient,
+		sandbox:      sandbox,
 		ss:           ss,
 	}
 }
@@ -734,7 +733,7 @@ func (s *FlowFileService) PullFlowFiles(c *gin.Context) {
 		return
 	}
 
-	if s.dockerClient == nil {
+	if s.sandbox == nil {
 		err = errors.New("docker client not configured on this server")
 		logger.FromContext(c).WithError(err).WithField("flow_id", flowID).Error("docker client unavailable for pull")
 		response.Error(c, response.ErrInternal, err)
@@ -742,7 +741,7 @@ func (s *FlowFileService) PullFlowFiles(c *gin.Context) {
 	}
 
 	containerName := primaryContainerName(s.tenantPrefix, flowID)
-	running, err := s.dockerClient.IsContainerRunning(c.Request.Context(), containerName)
+	running, err := s.sandbox.IsRunning(c.Request.Context(), containerName)
 	if err != nil {
 		logger.FromContext(c).WithError(err).WithFields(map[string]any{
 			"flow_id":        flowID,
@@ -764,7 +763,7 @@ func (s *FlowFileService) PullFlowFiles(c *gin.Context) {
 	updatedFiles := make([]models.FlowFile, 0)
 
 	for _, entry := range entries {
-		reader, _, err := s.dockerClient.CopyFromContainer(c.Request.Context(), containerName, entry.containerPath)
+		reader, _, err := s.sandbox.CopyOut(c.Request.Context(), containerName, entry.containerPath)
 		if err != nil {
 			logger.FromContext(c).WithError(err).WithFields(map[string]any{
 				"flow_id":        flowID,
@@ -959,7 +958,7 @@ func (s *FlowFileService) GetFlowContainerFiles(c *gin.Context) {
 		return
 	}
 
-	if s.dockerClient == nil {
+	if s.sandbox == nil {
 		err = errors.New("docker client not configured on this server")
 		logger.FromContext(c).WithError(err).WithField("flow_id", flowID).Error("docker client unavailable for container files list")
 		response.Error(c, response.ErrInternal, err)
@@ -993,7 +992,7 @@ func (s *FlowFileService) GetFlowContainerFiles(c *gin.Context) {
 	}
 
 	containerName := primaryContainerName(s.tenantPrefix, flowID)
-	running, err := s.dockerClient.IsContainerRunning(c.Request.Context(), containerName)
+	running, err := s.sandbox.IsRunning(c.Request.Context(), containerName)
 	if err != nil {
 		logger.FromContext(c).WithError(err).WithFields(map[string]any{
 			"flow_id":        flowID,
@@ -1054,7 +1053,7 @@ func (s *FlowFileService) GetFlowContainerFiles(c *gin.Context) {
 	}
 
 	for _, containerPath := range containerPaths {
-		pathStat, err := s.dockerClient.ContainerStatPath(c.Request.Context(), containerName, containerPath)
+		pathStat, err := s.sandbox.StatPath(c.Request.Context(), containerName, containerPath)
 		if err != nil {
 			if cerr := c.Request.Context().Err(); cerr != nil {
 				response.Error(c, response.ErrInternal, cerr)
@@ -1074,7 +1073,7 @@ func (s *FlowFileService) GetFlowContainerFiles(c *gin.Context) {
 			continue
 		}
 
-		listing, err := s.dockerClient.ListContainerDir(c.Request.Context(), containerName, containerPath)
+		listing, err := s.sandbox.ListDir(c.Request.Context(), containerName, containerPath)
 		if err != nil {
 			if cerr := c.Request.Context().Err(); cerr != nil {
 				response.Error(c, response.ErrInternal, cerr)
@@ -1099,11 +1098,15 @@ func (s *FlowFileService) GetFlowContainerFiles(c *gin.Context) {
 				continue
 			}
 			seenFailPaths[fe.Path] = struct{}{}
-			rawFailureMessages[fe.Path] = fe.Err.Error()
+			rawFailureMessages[fe.Path] = fe.Err
+			msg := "entry could not be read"
+			if version.IsDevelopMode() {
+				msg = fe.Err
+			}
 			allFailures = append(allFailures, models.ContainerFileError{
 				Name:    fe.Name,
 				Path:    fe.Path,
-				Message: failureMessage(fe.Err),
+				Message: msg,
 			})
 		}
 	}
@@ -1269,12 +1272,12 @@ func (s *FlowFileService) resolveCachedPath(flowID uint64, reqPath string) (stri
 // "resources/dir/b.yml"). One tar archive and one CopyToContainer call per invocation.
 // Returns nil when Docker is unavailable, the container is not running, or entries is empty.
 func (s *FlowFileService) copyLocalFilesToPrimaryWork(ctx context.Context, flowID uint64, entries []flowfiles.TarEntry) error {
-	if s.dockerClient == nil || len(entries) == 0 {
+	if s.sandbox == nil || len(entries) == 0 {
 		return nil
 	}
 
 	containerName := primaryContainerName(s.tenantPrefix, flowID)
-	running, err := s.dockerClient.IsContainerRunning(ctx, containerName)
+	running, err := s.sandbox.IsRunning(ctx, containerName)
 	if err != nil || !running {
 		return nil
 	}
@@ -1285,8 +1288,7 @@ func (s *FlowFileService) copyLocalFilesToPrimaryWork(ctx context.Context, flowI
 		errCh <- flowfiles.WriteFilesTar(pw, entries)
 	}()
 
-	copyErr := s.dockerClient.CopyToContainer(ctx, containerName, docker.WorkFolderPathInContainer, pr,
-		client.CopyToContainerOptions{AllowOverwriteDirWithFile: true})
+	copyErr := s.sandbox.CopyIn(ctx, containerName, docker.WorkFolderPathInContainer, pr)
 	pr.Close()
 	writeErr := <-errCh
 	if copyErr != nil {
@@ -1334,7 +1336,7 @@ func (s *FlowFileService) pushResourcePathsToContainer(c *gin.Context, flowID ui
 // the running container. When Docker is unavailable or the container is not running,
 // the function returns nil — the cache divergence will be resolved on next container start.
 func (s *FlowFileService) deleteUploadsFromContainer(ctx context.Context, flowID uint64, reqPaths []string) error {
-	if s.dockerClient == nil || len(reqPaths) == 0 {
+	if s.sandbox == nil || len(reqPaths) == 0 {
 		return nil
 	}
 
@@ -1353,7 +1355,7 @@ func (s *FlowFileService) deleteUploadsFromContainer(ctx context.Context, flowID
 	}
 
 	containerName := primaryContainerName(s.tenantPrefix, flowID)
-	running, err := s.dockerClient.IsContainerRunning(ctx, containerName)
+	running, err := s.sandbox.IsRunning(ctx, containerName)
 	if err != nil {
 		return nil // container absent or unavailable — cache deletion will be synced on next start
 	}
@@ -1368,7 +1370,7 @@ func (s *FlowFileService) deleteUploadsFromContainer(ctx context.Context, flowID
 	}
 	cmd := "rm -rf -- " + strings.Join(quotedPaths, " ")
 
-	createResp, err := s.dockerClient.ContainerExecCreate(ctx, containerName, client.ExecCreateOptions{
+	execID, err := s.sandbox.Exec(ctx, containerName, executor.ExecSpec{
 		Cmd:          []string{"sh", "-c", cmd},
 		AttachStdout: true,
 		AttachStderr: true,
@@ -1377,22 +1379,22 @@ func (s *FlowFileService) deleteUploadsFromContainer(ctx context.Context, flowID
 		return fmt.Errorf("failed to create container delete exec: %w", err)
 	}
 
-	resp, err := s.dockerClient.ContainerExecAttach(ctx, createResp.ID, client.ExecAttachOptions{})
+	stream, err := s.sandbox.ExecAttach(ctx, execID)
 	if err != nil {
 		return fmt.Errorf("failed to attach container delete exec: %w", err)
 	}
-	output, copyErr := io.ReadAll(resp.Reader)
-	resp.Close()
+	output, copyErr := io.ReadAll(stream.Stdout())
+	stream.Close()
 	if copyErr != nil {
 		return fmt.Errorf("failed to read container delete output: %w", copyErr)
 	}
 
-	inspect, err := s.dockerClient.ContainerExecInspect(ctx, createResp.ID)
+	exitCode, err := s.sandbox.ExecResult(ctx, execID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container delete exec: %w", err)
 	}
-	if inspect.ExitCode != 0 {
-		return fmt.Errorf("container delete command failed with exit code %d: %s", inspect.ExitCode, string(output))
+	if exitCode != 0 {
+		return fmt.Errorf("container delete command failed with exit code %d: %s", exitCode, string(output))
 	}
 
 	return nil
@@ -1493,7 +1495,7 @@ func convertModelFlowFile(file models.FlowFile) *model.FlowFile {
 	}
 }
 
-func convertContainerFiles(basePath string, stats []container.PathStat) []models.ContainerFile {
+func convertContainerFiles(basePath string, stats []executor.PathStat) []models.ContainerFile {
 	files := make([]models.ContainerFile, 0, len(stats))
 	for _, stat := range stats {
 		files = append(files, convertContainerFile(basePath, stat))
@@ -1506,7 +1508,7 @@ func convertContainerFiles(basePath string, stats []container.PathStat) []models
 	return files
 }
 
-func convertContainerFile(basePath string, stat container.PathStat) models.ContainerFile {
+func convertContainerFile(basePath string, stat executor.PathStat) models.ContainerFile {
 	filePath := path.Join(basePath, stat.Name)
 
 	return models.ContainerFile{

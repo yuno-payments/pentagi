@@ -9,6 +9,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 	"pentagi/pkg/providers/provider"
 	"pentagi/pkg/providers/tester/mock"
 	"pentagi/pkg/templates"
@@ -151,7 +152,7 @@ func TestTitle_NormalizeTitle_IsAppliedToEveryGeneratedTitle(t *testing.T) {
 			pc := &providerController{
 				cfg:             &config.Config{DockerImageSelectionMode: ImageSelectionModeFixed},
 				db:              noUserProvidersQuerier{},
-				docker:          defaultImageDocker{},
+				sandbox:         dockerbackend.New(defaultImageDocker{}, &config.Config{}),
 				startCallNumber: &atomic.Int64{},
 				Providers:       provider.Providers{prv.Name(): prv},
 			}

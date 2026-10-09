@@ -16,6 +16,7 @@ import (
 	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 	obs "pentagi/pkg/observability"
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/provider"
@@ -128,9 +129,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize Docker client: %v", err)
 	}
+	sandbox := dockerbackend.New(dockerClient, cfg)
 
 	// Initialize provider controller
-	providerController, err := providers.NewProviderController(cfg, queries, dockerClient)
+	providerController, err := providers.NewProviderController(cfg, queries, sandbox)
 	if err != nil {
 		log.Fatalf("Failed to initialize provider controller: %v", err)
 	}
@@ -140,7 +142,7 @@ func main() {
 		queries,
 		cfg,
 		ctx,
-		dockerClient,
+		sandbox,
 		providerController,
 		*flowID,
 		*userID,

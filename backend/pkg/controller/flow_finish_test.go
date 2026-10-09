@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"pentagi/pkg/config"
 	"pentagi/pkg/database"
 	"pentagi/pkg/docker"
+	"pentagi/pkg/executor/dockerbackend"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -188,7 +190,7 @@ func TestFlowFinish_FinishUnloadedFlow_RecordsTheFlowBeforeTheSandboxSpendsTheBu
 	}
 	dkr := &budgetEatingDocker{}
 	fc, _, _ := newFinishController(q)
-	fc.docker = dkr
+	fc.sandbox = dockerbackend.New(dkr, &config.Config{})
 
 	require.NoError(t, fc.finishFlowWithin(context.Background(), flowID, 50*time.Millisecond))
 
